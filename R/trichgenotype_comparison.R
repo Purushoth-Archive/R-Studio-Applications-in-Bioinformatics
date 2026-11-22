@@ -1,4 +1,5 @@
 #****************************************************
+#*This script was written by Purushoth Puvanendran and his group members and edit suggestions were proposed by Hellen Yichen Shen.
 #*Question: 
 #*If we compare the retrotransposon and DNA transposons content between a T. spiralis isolate and a T. nelsoni isolate, differences may be elucidated key classes that contribute to pathogencity mechanisms of interest. 
 #*
@@ -12,6 +13,8 @@ library(tidyverse)
 conflicted::conflicts_prefer(dplyr::filter())
 
 # Reading data and creating data frames 
+
+setwd("./R/")
 
 df_spiralis <- read_csv(file = "../data/trichinella_spiralis_te.csv") 
 df_nelsoni <- read_csv(file = "../data/trichinella_nelsoni_te.csv") 
@@ -27,55 +30,75 @@ ls_dna_transposon = c("DNA/hAT","DNA/hAT-Ac","DNA/MULE-MuDR","DNA/PIF-Harbinger"
 
 ls_retrotransposon = c("LINE/CR1","LINE/RTE-BovB","LTR/Gypsy","LTR/Ngaro","LTR/Pao","PLE","PLE/Naiad","SINE/tRNA-Deu-L2","SINE/tRNA-RTE")
 
-# Create a new column to identify which query is a DNA transposon vs. retrotransposon and create a summary table with the counts for each type of TE, % of what share of all the transposon insertions belongs to each TE type, and % of what share of the transposon-derived sequence belongs to each TE type
 
-df_spiralis_summary <- df_spiralis |>
-  mutate(
-    te_type = case_when(
-      matching_class %in% ls_dna_transposon ~ "DNA transposon",
-      matching_class %in% ls_retrotransposon ~ "Retrotransposon",
-      TRUE ~ "Other"
+## Edit 1: Reduce code redundancy using a function
+# Create a function to summarize TE content for each species
+
+summarise_te <- function(df, species_name) {
+  
+  df |>
+    mutate(
+      te_type = case_when(
+        matching_class %in% ls_dna_transposon ~ "DNA transposon",
+        matching_class %in% ls_retrotransposon ~ "Retrotransposon",
+        TRUE ~ "Other"
+      )
+    ) |>
+    filter(te_type != "Other") |>
+    group_by(te_type) |>
+    summarise(
+      n_copies = n(),
+      total_bp = sum(qry_width),
+      .groups = "drop"
+    ) |>
+    mutate(
+      pct_copies = 100 * n_copies / sum(n_copies),
+      pct_bp = 100 * total_bp / sum(total_bp),
+      species = species_name
     )
-  ) |>
-  filter(te_type != "Other") |>
-  group_by(te_type) |>
-  summarise(n_copies = n(), total_bp = sum(qry_width)) |>
-  mutate(
-    pct_copies = 100 * n_copies / sum(n_copies),
-    pct_bp = 100 * total_bp / sum(total_bp),
-    species = "spiralis"
+}
+
+# Apply the function to both species
+
+df_spiralis_summary <- summarise_te(df_spiralis, "spiralis")
+df_nelsoni_summary <- summarise_te(df_nelsoni, "nelsoni")
+
+# Combine the summary tables
+
+df_te_summary <- bind_rows(
+  df_spiralis_summary,
+  df_nelsoni_summary
+)
+
+
+
+
+## Edit 2: Compare TE copy abundance and sequence length
+# Compare TE copy abundance and sequence length
+
+df_te_plot <- df_te_summary |>
+  select(species, te_type, pct_copies, pct_bp) |>
+  pivot_longer(
+    cols = c(pct_copies, pct_bp),
+    names_to = "measurement",
+    values_to = "percentage"
   )
 
-# Repeating above coding steps for T. nelsoni
+# Plot both measurements side by side
 
-df_nelsoni_summary <- df_nelsoni |>
-  mutate(
-    te_type = case_when(
-      matching_class %in% ls_dna_transposon ~ "DNA transposon",
-      matching_class %in% ls_retrotransposon ~ "Retrotransposon",
-      TRUE ~ "Other"
-    )
-  ) |>
-  filter(te_type != "Other") |>
-  group_by(te_type) |>
-  summarise(n_copies = n(), total_bp = sum(qry_width)) |>
-  mutate(
-    pct_copies = 100 * n_copies / sum(n_copies),
-    pct_bp = 100 * total_bp / sum(total_bp),
-    species = "nelsoni"
-  )
-
-# Create a new data frame which combine the data in the summary data frames created above
-
-df_te_summary <- rbind(df_spiralis_summary, df_nelsoni_summary)
-
-# Plotting DNA transposons vs. retrotransposons in T. spiralis and T. nelsoni
-
-ggplot(df_te_summary, aes(x = species, y = pct_copies, fill = te_type)) +
+ggplot(df_te_plot,
+       aes(x = species, y = percentage, fill = te_type)) +
   geom_col() +
-  labs(x = NULL, y = "% of TE copies", fill = NULL,
-       title = "DNA transposons vs. Retrotransposons in Trichinella species") +
+  facet_wrap(~measurement) +
+  labs(
+    x = "Species",
+    y = "Percentage (%)",
+    fill = "TE type",
+    title = "TE Copy Abundance and Sequence Length"
+  ) +
   theme_minimal()
+
+
 
 # Perform a Chi-squared statistical test 
 
@@ -124,69 +147,43 @@ ggplot(df_trich_div, aes(x = perc_div, fill = species)) +
 
 # Performing a Kolmogorov-Smirnov (KS) test to see if both distributions come from the same underlying population 
 
-# LINE/CR1 class 
+## Edit 3: Automate KS tests using a loop
+# Run KS tests for all selected retrotransposon classes
 
-spiralis_cr1 <- df_spiralis_div |>
-  filter(matching_class == "LINE/CR1")
+ls_ks_results <- list()
 
-nelsoni_cr1 <- df_nelsoni_div |>
-  filter(matching_class == "LINE/CR1")
+for (te in ls_retro_subset) {
+  
+  spiralis_values <- df_spiralis_div |>
+    filter(matching_class == te) |>
+    pull(perc_div)
+  
+  nelsoni_values <- df_nelsoni_div |>
+    filter(matching_class == te) |>
+    pull(perc_div)
+  
+  ks_result <- ks.test(
+    spiralis_values,
+    nelsoni_values
+  )
+  
+  # Store the p-value for each TE class
+  ls_ks_results[[te]] <- ks_result$p.value
+}
 
-ks_cr1 <- ks.test(spiralis_cr1$perc_div, nelsoni_cr1$perc_div)
-ks_cr1
-rm(spiralis_cr1, nelsoni_cr1)
+# Create a summary table and adjust p-values
 
-# LTR/Pao class
+df_ks_results <- tibble(
+  te_class = names(ls_ks_results),
+  p_value = unlist(ls_ks_results)
+) |>
+  mutate(
+    adjusted_p = p.adjust(
+      p_value,
+      method = "bonferroni"
+    )
+  )
 
-spiralis_pao <- df_spiralis_div |>
-  filter(matching_class == "LTR/Pao")
+print(df_ks_results)
 
-nelsoni_pao <- df_nelsoni_div |>
-  filter(matching_class == "LTR/Pao")
 
-ks_pao <- ks.test(spiralis_pao$perc_div, nelsoni_pao$perc_div)
-ks_pao
-rm(spiralis_pao, nelsoni_pao)
-
-# PLE class
-
-spiralis_ple <- df_spiralis_div |>
-  filter(matching_class == "PLE")
-
-nelsoni_ple <- df_nelsoni_div |>
-  filter(matching_class == "PLE")
-
-ks_ple <- ks.test(spiralis_ple$perc_div, nelsoni_ple$perc_div)
-ks_ple
-rm(spiralis_ple, nelsoni_ple)
-
-# PLE/Naiad class
-
-spiralis_nai <- df_spiralis_div |>
-  filter(matching_class == "PLE/Naiad")
-
-nelsoni_nai <- df_nelsoni_div |>
-  filter(matching_class == "PLE/Naiad")
-
-ks_nai <- ks.test(spiralis_nai$perc_div, nelsoni_nai$perc_div)
-rm(spiralis_nai, nelsoni_nai)
-
-# LTR/Gypsy class
-
-spiralis_gypsy <- df_spiralis_div |>
-  filter(matching_class == "LTR/Gypsy")
-
-nelsoni_gypsy <- df_nelsoni_div |>
-  filter(matching_class == "LTR/Gypsy")
-
-ks_gypsy <- ks.test(spiralis_gypsy$perc_div, nelsoni_gypsy$perc_div)
-ks_gypsy
-rm(spiralis_gypsy, nelsoni_gypsy)
-
-# Adjusting p-values to ensure there are no false positives by multiplying by the number of KS tests performed (4)
-
-ls_ks_pvalues <- c("LINE/CR1" = ks_cr1$p.value, "LTR/Pao" = ks_pao$p.value, "PLE" = ks_ple$p.value, "PLE/Naiad" = ks_nai$p.value, "LTR/Gypsy" = ks_gypsy$p.value)
-
-p.adjust(ls_ks_pvalues, method = "bonferroni")
-
-rm(ks_cr1, ks_nai, ks_pao, ks_ple)
